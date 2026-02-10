@@ -5,6 +5,14 @@ rosgraph_monitor:
     default_value: 1000
     read_only: true
     description: "Period in milliseconds between each publishing of the graph diagnostics."
+  rosgraph_publish_period_ms:
+    type: int
+    default_value: 0
+    read_only: true
+    description: |
+      Period in milliseconds for periodic rosgraph publishing.
+      Set to 0 to disable periodic publishing (only publish on graph changes).
+      Useful for rosbag recording where consistent snapshots are needed even when graph is stable.
   graph_monitor:
     diagnostic_namespace:
       type: string

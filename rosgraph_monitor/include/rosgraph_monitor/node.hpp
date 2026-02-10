@@ -16,6 +16,7 @@
 #define ROSGRAPH_MONITOR__NODE_HPP_
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,7 @@ protected:
   void on_topic_statistics(const rosgraph_monitor_msgs::msg::TopicStatistics::SharedPtr msg);
   void publish_diagnostics();
   void publish_rosgraph(rosgraph_monitor_msgs::msg::Graph rosgraph_msg);
+  void publish_rosgraph_periodic();
   QueryParamsReturnType query_params(
     const std::string & node_name,
     std::function<void(const rcl_interfaces::msg::ListParametersResult &)> callback);
@@ -61,6 +63,13 @@ protected:
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pub_diagnostics_;
   rclcpp::Publisher<rosgraph_monitor_msgs::msg::Graph>::SharedPtr pub_rosgraph_;
   rclcpp::TimerBase::SharedPtr timer_publish_report_;
+  rclcpp::TimerBase::SharedPtr timer_publish_rosgraph_;
+
+  /// @brief Cache of last published rosgraph message for periodic republishing
+  /// Protected by rosgraph_cache_mutex_ (accessed from watch thread and timer thread)
+  std::mutex rosgraph_cache_mutex_;
+  rosgraph_monitor_msgs::msg::Graph last_rosgraph_msg_;
+  bool has_rosgraph_msg_ = false;
 };
 
 }  // namespace rosgraph_monitor

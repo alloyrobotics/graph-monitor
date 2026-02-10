@@ -298,16 +298,51 @@ std::optional<RosGraphMonitor::EndpointTrackingMap::iterator> RosGraphMonitor::a
   if (ignore_node(proposed_tracking.node_name)) {
     return std::nullopt;
   }
+
+  // WORKAROUND: ROS2 graph API bug returns same node as subscriber to multiple topics
+  // when topics share the same message type. Check if we already track this (node, topic)
+  // pair to avoid GID collision overwriting the correct entry.
+  auto lookup_key = std::make_pair(proposed_tracking.node_name, topic_name);
+  auto existing_lookup = subscription_lookup_.find(lookup_key);
+  if (existing_lookup != subscription_lookup_.end()) {
+    // Already tracking this (node, topic) subscription - return existing entry
+    auto existing_it = subscriptions_.find(existing_lookup->second);
+    if (existing_it != subscriptions_.end()) {
+      existing_it->second.stale = false;
+      return existing_it;
+    }
+  }
+
   auto [it, inserted] = subscriptions_.emplace(info.endpoint_gid(), proposed_tracking);
   auto & [gid, tracking] = *it;
-  subscription_lookup_.insert_or_assign(
-    std::make_pair(tracking.node_name, tracking.topic_name),
-    gid);
+
+  // Check for GID collision where different (node, topic) pairs have same GID
+  if (!inserted && tracking.topic_name != topic_name) {
+    // GID collision - the ROS2 API returned the same GID for different topics.
+    // This is a known upstream bug where topics with same message type get confused.
+    // Replace the existing entry with the new one - since the API is unreliable,
+    // we prefer to keep the more recently discovered topic.
+    RCLCPP_DEBUG(
+      logger_, "GID collision detected (known ROS2 API bug): Replacing %s::%s with %s::%s",
+      tracking.node_name.c_str(), tracking.topic_name.c_str(),
+      proposed_tracking.node_name.c_str(), proposed_tracking.topic_name.c_str());
+
+    // Remove old entry from lookup map
+    subscription_lookup_.erase(std::make_pair(tracking.node_name, tracking.topic_name));
+
+    // Must erase and re-insert because EndpointTracking has const members
+    subscriptions_.erase(it);
+    auto [new_it, new_inserted] = subscriptions_.emplace(info.endpoint_gid(), proposed_tracking);
+    it = new_it;
+    inserted = new_inserted;
+  }
+
+  subscription_lookup_.insert_or_assign(lookup_key, gid);
   if (inserted) {
     RCLCPP_DEBUG(
       logger_, "New Subscription: %s::%s (%s)",
-      tracking.node_name.c_str(), tracking.topic_name.c_str(),
-      gid_to_str(tracking.info.endpoint_gid()).c_str());
+      proposed_tracking.node_name.c_str(), proposed_tracking.topic_name.c_str(),
+      gid_to_str(proposed_tracking.info.endpoint_gid()).c_str());
   }
   return it;
 }
@@ -694,6 +729,10 @@ void RosGraphMonitor::fill_rosgraph_msg(rosgraph_monitor_msgs::msg::Graph & msg)
     for (auto & [gid, tracking] : subscriptions_) {
       if (tracking.node_name == node_name) {
         auto topic_msg = tracking.to_msg();
+        RCLCPP_DEBUG(
+          logger_, "Adding subscription to node %s: topic=%s, gid=%s",
+          node_name.c_str(), tracking.topic_name.c_str(),
+          gid_to_str(gid).c_str());
         node_msg.subscriptions.push_back(topic_msg);
       }
     }

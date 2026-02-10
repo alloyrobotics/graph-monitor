@@ -98,6 +98,16 @@ Node::Node(const rclcpp::NodeOptions & options)
     std::bind(
       &Node::publish_rosgraph, this,
       std::placeholders::_1));
+
+  // Set up periodic rosgraph publishing if enabled
+  if (params_.rosgraph_publish_period_ms > 0) {
+    timer_publish_rosgraph_ = create_wall_timer(
+      std::chrono::milliseconds(params_.rosgraph_publish_period_ms),
+      std::bind(&Node::publish_rosgraph_periodic, this));
+    RCLCPP_INFO(
+      get_logger(), "Periodic rosgraph publishing enabled at %ld ms interval",
+      params_.rosgraph_publish_period_ms);
+  }
 }
 
 void Node::update_params(const rosgraph_monitor::Params & params)
@@ -170,7 +180,27 @@ void Node::publish_diagnostics()
 
 void Node::publish_rosgraph(rosgraph_monitor_msgs::msg::Graph rosgraph_msg)
 {
+  {
+    std::lock_guard<std::mutex> lock(rosgraph_cache_mutex_);
+    last_rosgraph_msg_ = rosgraph_msg;
+    has_rosgraph_msg_ = true;
+  }
+
+  // Publish immediately on graph change
   pub_rosgraph_->publish(std::move(rosgraph_msg));
+}
+
+void Node::publish_rosgraph_periodic()
+{
+  std::lock_guard<std::mutex> lock(rosgraph_cache_mutex_);
+  if (!has_rosgraph_msg_) {
+    return;
+  }
+
+  // Create a copy with updated timestamp
+  rosgraph_monitor_msgs::msg::Graph msg = last_rosgraph_msg_;
+  msg.timestamp = get_clock()->now();
+  pub_rosgraph_->publish(std::move(msg));
 }
 
 }  // namespace rosgraph_monitor
